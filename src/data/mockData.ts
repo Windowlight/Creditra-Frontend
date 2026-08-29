@@ -1,6 +1,37 @@
 import type { CreditLine, AprHistoryEntry } from '../types/creditLine';
 import type { Attestation } from '../types/attestation';
 
+// ─── History cursor state ────────────────────────────────────────────────────
+/**
+ * Stores the next pagination cursor per history filter signature. When filters
+ * change, call `resetHistoryCursors` so stale cursors cannot be reused.
+ */
+const historyCursors = new Map<string, string | null>();
+
+/**
+ * Clears history cursors. With no arguments, clears all cursors. When a filter
+ * key is supplied, only that filter's cursor is cleared.
+ */
+export function resetHistoryCursors(filterKey?: string): void {
+  if (filterKey === undefined) {
+    historyCursors.clear();
+  } else {
+    historyCursors.delete(filterKey);
+  }
+}
+
+export function getHistoryCursor(filterKey: string): string | null {
+  return historyCursors.get(filterKey) ?? null;
+}
+
+export function setHistoryCursor(filterKey: string, cursor: string | null): void {
+  if (cursor === null) {
+    historyCursors.delete(filterKey);
+  } else {
+    historyCursors.set(filterKey, cursor);
+  }
+}
+
 // ─── APR history generation helper ───────────────────────────────────────────
 /**
  * Generates a realistic-looking APR history for the past `days` days.

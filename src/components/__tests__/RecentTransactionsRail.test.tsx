@@ -130,4 +130,36 @@ describe('RecentTransactionsRail', () => {
     renderRail(txs, false);
     expect(screen.getByRole('region', { name: 'Recent transactions' })).toBeInTheDocument();
   });
+
+  test('resets history cursor by not retaining previous transactions when transactions prop changes', () => {
+    const oldTx = buildTx({ id: 'TX-OLD', type: 'Draw', note: 'Old filter' });
+    const { rerender } = renderRail([oldTx], false);
+    expect(screen.getByText('Old filter')).toBeInTheDocument();
+
+    const newTx = buildTx({ id: 'TX-NEW', type: 'Repay', note: 'New filter' });
+    rerender(
+      <BrowserRouter>
+        <RecentTransactionsRail transactions={[newTx]} isLoading={false} />
+      </BrowserRouter>
+    );
+
+    expect(screen.queryByText('Old filter')).not.toBeInTheDocument();
+    expect(screen.getByText('New filter')).toBeInTheDocument();
+    expect(screen.getByText('+')).toBeInTheDocument();
+  });
+
+  test('shows empty state after transactions change from non-empty to empty', () => {
+    const tx = buildTx({ id: 'TX-1', type: 'Draw' });
+    const { rerender } = renderRail([tx], false);
+    expect(screen.getByText('Test transaction')).toBeInTheDocument();
+
+    rerender(
+      <BrowserRouter>
+        <RecentTransactionsRail transactions={[]} isLoading={false} />
+      </BrowserRouter>
+    );
+
+    expect(screen.queryByText('Test transaction')).not.toBeInTheDocument();
+    expect(screen.getByText('No transactions yet')).toBeInTheDocument();
+  });
 });
