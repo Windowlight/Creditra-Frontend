@@ -30,22 +30,19 @@ export default function CompareLinesPanel({ lines, onClose }: CompareLinesPanelP
   };
 
   return (
-    <div
-      id="compare-panel"
-      style={{
-        position: 'fixed',
-        top: 0,
-        right: 0,
-        width: '480px',
-        height: '100vh',
-        background: 'var(--surface)',
-        borderLeft: '1px solid var(--border)',
-        boxShadow: '-4px 0 20px rgba(0,0,0,0.1)',
-        display: 'flex',
-        flexDirection: 'column',
-        zIndex: 1000,
-      }}
-    >
+    <div id="compare-panel" style={{
+      position: 'fixed',
+      top: 0,
+      right: 0,
+      width: '480px',
+      height: '100vh',
+      background: 'var(--surface)',
+      borderLeft: '1px solid var(--border)',
+      boxShadow: '-4px 0 20px rgba(0,0,0,0.1)',
+      display: 'flex',
+      flexDirection: 'column',
+      zIndex: 1000,
+    }}>
       <div style={{ padding: '1.25rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h2 id="compare-lines-title" style={{ margin: 0, fontSize: '1.25rem' }}>Compare Credit Lines</h2>
         <button type="button" aria-label="Close compare panel" onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
