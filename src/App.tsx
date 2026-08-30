@@ -1,25 +1,42 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, lazy, Suspense } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { CommandPalette } from "./components/CommandPalette";
-import { Dashboard } from "./pages/Dashboard";
 import { WalletProvider } from "./context/WalletContext";
 import { KycProvider } from "./context/KycContext";
 import { NotificationProvider } from "./context/NotificationContext";
 import { ReducedMotionProvider } from "./context/ReducedMotionContext";
 import { KycDrawer } from "./components/KycDrawer";
-import DrawCreditPage from "./pages/DrawCreditPage";
-import CreditLines from "./pages/CreditLines";
-import { TransactionHistory } from "./pages/TransactionHistory";
-import { RequestEvaluation } from "./pages/RequestEvaluation";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { NotFound } from "./pages/NotFound";
-import HelpCenter from "./pages/HelpCenter";
 import { ShortcutHelpOverlay } from "./components/ShortcutHelpOverlay";
-import { DutchAuctions } from "./pages/DutchAuctions";
-import { LinkedAccounts } from "./pages/LinkedAccounts";
 import { WalletReconnectBanner } from "./components/WalletReconnectBanner";
 import { NetworkMismatchBanner } from "./components/notifications/NetworkMismatchBanner";
 import { Header } from "./layouts/Header";
+import { Skeleton } from "./components/Skeleton";
+
+// ── Code-split route components (non-critical for first paint) ────────────────
+const Dashboard = lazy(() => import("./pages/Dashboard").then(m => ({ default: m.Dashboard })));
+const DrawCreditPage = lazy(() => import("./pages/DrawCreditPage"));
+const CreditLines = lazy(() => import("./pages/CreditLines"));
+const TransactionHistory = lazy(() => import("./pages/TransactionHistory").then(m => ({ default: m.TransactionHistory })));
+const RequestEvaluation = lazy(() => import("./pages/RequestEvaluation").then(m => ({ default: m.RequestEvaluation })));
+const NotFound = lazy(() => import("./pages/NotFound").then(m => ({ default: m.NotFound })));
+const HelpCenter = lazy(() => import("./pages/HelpCenter"));
+const DutchAuctions = lazy(() => import("./pages/DutchAuctions").then(m => ({ default: m.DutchAuctions })));
+const LinkedAccounts = lazy(() => import("./pages/LinkedAccounts").then(m => ({ default: m.LinkedAccounts })));
+const SessionTimeoutBanner = lazy(() => import("./components/SessionTimeoutBanner").then(m => ({ default: m.SessionTimeoutBanner })));
+const NotificationPreferences = lazy(() => import("./pages/NotificationPreferences").then(m => ({ default: m.NotificationPreferences })));
+
+// ── Suspense Fallback for Route Loading ───────────────────────────────────────
+/** Minimal skeleton shown while route chunks load (preserves first paint). */
+function RouteLoadingFallback() {
+  return (
+    <div style={{ padding: "2rem 0" }}>
+      <Skeleton style={{ width: "200px", height: "32px", marginBottom: "0.5rem", borderRadius: "6px" }} />
+      <Skeleton style={{ width: "300px", height: "16px", marginBottom: "2rem", borderRadius: "4px" }} />
+      <Skeleton style={{ width: "100%", height: "200px", borderRadius: "8px" }} />
+    </div>
+  );
+}
 
 const isEditableTarget = (target: EventTarget | null) => {
   if (!(target instanceof HTMLElement)) return false;
@@ -112,25 +129,29 @@ function App() {
             <WalletReconnectBanner />
             {/* Session-timeout warning banner — visible 60 s before
                 the wallet extension silently disconnects (#227). */}
-            <SessionTimeoutBanner />
+            <Suspense fallback={null}>
+              <SessionTimeoutBanner />
+            </Suspense>
             <main className="main">
               <NetworkMismatchBanner />
-              <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/transactions" element={<TransactionHistory />} />
-                <Route path="/credit-lines" element={<CreditLines />} />
-                <Route path="/help" element={<HelpCenter />} />
-                <Route path="/draw-credit" element={<DrawCreditPage />} />
-                <Route
-                  path="/draw-credit/success"
-                  element={<DrawCreditPage />}
-                />
-                <Route path="/open-credit" element={<RequestEvaluation />} />
-                <Route path="/dutch-auctions" element={<DutchAuctions />} />
-                <Route path="/linked-accounts" element={<LinkedAccounts />} />
-                <Route path="/notification-preferences" element={<NotificationPreferences />} />
-                <Route path="*" element={<NotFound />} />
-              </Routes>
+              <Suspense fallback={<RouteLoadingFallback />}>
+                <Routes>
+                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/transactions" element={<TransactionHistory />} />
+                  <Route path="/credit-lines" element={<CreditLines />} />
+                  <Route path="/help" element={<HelpCenter />} />
+                  <Route path="/draw-credit" element={<DrawCreditPage />} />
+                  <Route
+                    path="/draw-credit/success"
+                    element={<DrawCreditPage />}
+                  />
+                  <Route path="/open-credit" element={<RequestEvaluation />} />
+                  <Route path="/dutch-auctions" element={<DutchAuctions />} />
+                  <Route path="/linked-accounts" element={<LinkedAccounts />} />
+                  <Route path="/notification-preferences" element={<NotificationPreferences />} />
+                  <Route path="*" element={<NotFound />} />
+                </Routes>
+              </Suspense>
             </main>
             <ShortcutHelpOverlay
               isOpen={isShortcutHelpOpen}
