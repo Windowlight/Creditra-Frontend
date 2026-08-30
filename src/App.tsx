@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, lazy, Suspense } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { CommandPalette } from "./components/CommandPalette";
+import { RouteAnnouncer, RouteHeadProvider } from "./components/RouteAnnouncer";
 import { WalletProvider } from "./context/WalletContext";
+import { ThemeProvider } from "./context/ThemeContext";
+import { ContrastProvider } from "./context/ContrastContext";
 import { KycProvider } from "./context/KycContext";
 import { NotificationProvider } from "./context/NotificationContext";
 import { ReducedMotionProvider } from "./context/ReducedMotionContext";
@@ -108,78 +111,85 @@ function App() {
 
   return (
     <ErrorBoundary>
-      <WalletProvider>
-        <KycProvider>
-        <NotificationProvider>
-        <ReducedMotionProvider>
-        <BrowserRouter>
-          <div className="app">
-            <Header
-              settingsTriggerRef={settingsTriggerRef}
-              kycTriggerRef={kycTriggerRef}
-              onSettingsClick={() => {
-                setOpenedFromSettingsLink(true);
-                setIsShortcutHelpOpen(true);
-              }}
-              onKycClick={() => setIsKycDrawerOpen(true)}
-            />
+      <ThemeProvider>
+        <ContrastProvider>
+          <WalletProvider>
+            <KycProvider>
+              <NotificationProvider>
+                <ReducedMotionProvider>
+                  <BrowserRouter>
+                    <RouteHeadProvider>
+                      <RouteAnnouncer />
+                      <div className="app">
+                        <Header
+                          settingsTriggerRef={settingsTriggerRef}
+                          kycTriggerRef={kycTriggerRef}
+                          onSettingsClick={() => {
+                            setOpenedFromSettingsLink(true);
+                            setIsShortcutHelpOpen(true);
+                          }}
+                          onKycClick={() => setIsKycDrawerOpen(true)}
+                        />
 
-            {/* Wallet auto-reconnect timeout banner — self-dismissing,
-                non-blocking; only visible when reconnect takes > 8 s. */}
-            <WalletReconnectBanner />
-            {/* Session-timeout warning banner — visible 60 s before
-                the wallet extension silently disconnects (#227). */}
-            <Suspense fallback={null}>
-              <SessionTimeoutBanner />
-            </Suspense>
-            <main className="main">
-              <NetworkMismatchBanner />
-              <Suspense fallback={<RouteLoadingFallback />}>
-                <Routes>
-                  <Route path="/" element={<Dashboard />} />
-                  <Route path="/transactions" element={<TransactionHistory />} />
-                  <Route path="/credit-lines" element={<CreditLines />} />
-                  <Route path="/help" element={<HelpCenter />} />
-                  <Route path="/draw-credit" element={<DrawCreditPage />} />
-                  <Route
-                    path="/draw-credit/success"
-                    element={<DrawCreditPage />}
-                  />
-                  <Route path="/open-credit" element={<RequestEvaluation />} />
-                  <Route path="/dutch-auctions" element={<DutchAuctions />} />
-                  <Route path="/linked-accounts" element={<LinkedAccounts />} />
-                  <Route path="/notification-preferences" element={<NotificationPreferences />} />
-                  <Route path="*" element={<NotFound />} />
-                </Routes>
-              </Suspense>
-            </main>
-            <ShortcutHelpOverlay
-              isOpen={isShortcutHelpOpen}
-              onClose={() => setIsShortcutHelpOpen(false)}
-              triggerRef={openedFromSettingsLink ? settingsTriggerRef : undefined}
-            />
-            <KycDrawer
-              isOpen={isKycDrawerOpen}
-              onClose={() => setIsKycDrawerOpen(false)}
-              onResume={(stepId) => {
-                // Navigate to the KYC page with the step pre-selected.
-                // Replace with router.push('/kyc?step=' + stepId) when the
-                // full KYC page exists.
-                console.info('[KYC] Resume at step:', stepId);
-              }}
-              triggerRef={kycTriggerRef}
-            />
-            <CommandPalette
-              isOpen={isPaletteOpen}
-              onClose={() => setIsPaletteOpen(false)}
-              triggerRef={paletteTriggerRef}
-            />
-          </div>
-        </BrowserRouter>
-        </ReducedMotionProvider>
-        </NotificationProvider>
-        </KycProvider>
-      </WalletProvider>
+                        {/* Wallet auto-reconnect timeout banner — self-dismissing,
+                            non-blocking; only visible when reconnect takes > 8 s. */}
+                        <WalletReconnectBanner />
+                        {/* Session-timeout warning banner — visible 60 s before
+                            the wallet extension silently disconnects (#227). */}
+                        <Suspense fallback={null}>
+                          <SessionTimeoutBanner />
+                        </Suspense>
+                        <main className="main">
+                          <NetworkMismatchBanner />
+                          <Suspense fallback={<RouteLoadingFallback />}>
+                            <Routes>
+                              <Route path="/" element={<Dashboard />} />
+                              <Route path="/transactions" element={<TransactionHistory />} />
+                              <Route path="/credit-lines" element={<CreditLines />} />
+                              <Route path="/help" element={<HelpCenter />} />
+                              <Route path="/draw-credit" element={<DrawCreditPage />} />
+                              <Route
+                                path="/draw-credit/success"
+                                element={<DrawCreditPage />}
+                              />
+                              <Route path="/open-credit" element={<RequestEvaluation />} />
+                              <Route path="/dutch-auctions" element={<DutchAuctions />} />
+                              <Route path="/linked-accounts" element={<LinkedAccounts />} />
+                              <Route path="/notification-preferences" element={<NotificationPreferences />} />
+                              <Route path="*" element={<NotFound />} />
+                            </Routes>
+                          </Suspense>
+                        </main>
+                        <ShortcutHelpOverlay
+                          isOpen={isShortcutHelpOpen}
+                          onClose={() => setIsShortcutHelpOpen(false)}
+                          triggerRef={openedFromSettingsLink ? settingsTriggerRef : undefined}
+                        />
+                        <KycDrawer
+                          isOpen={isKycDrawerOpen}
+                          onClose={() => setIsKycDrawerOpen(false)}
+                          onResume={(stepId) => {
+                            // Navigate to the KYC page with the step pre-selected.
+                            // Replace with router.push('/kyc?step=' + stepId) when the
+                            // full KYC page exists.
+                            console.info('[KYC] Resume at step:', stepId);
+                          }}
+                          triggerRef={kycTriggerRef}
+                        />
+                        <CommandPalette
+                          isOpen={isPaletteOpen}
+                          onClose={() => setIsPaletteOpen(false)}
+                          triggerRef={paletteTriggerRef}
+                        />
+                      </div>
+                    </RouteHeadProvider>
+                  </BrowserRouter>
+                </ReducedMotionProvider>
+              </NotificationProvider>
+            </KycProvider>
+          </WalletProvider>
+        </ContrastProvider>
+      </ThemeProvider>
     </ErrorBoundary>
   );
 }
