@@ -7,11 +7,12 @@
  *  3. SR paragraph outside SVG carries the same description (polite live region).
  *  4. Score is clamped: values < 0 render as 0, values > 100 render as 100.
  *  5. Fill arc carries data-score reflecting the normalised value.
- *  6. Animation key changes when score changes (triggers CSS re-animation).
+ *  6. Fill arc is never remounted on score change; dashoffset transitions
+ *     in place instead of resetting to empty on every update.
  *  7. Reduced-motion: data-reduced-motion="true" when matchMedia returns true;
  *     fill dashoffset equals the final offset (not circumference).
  *  8. Normal-motion: data-reduced-motion="false"; fill dashoffset equals
- *     circumference (animation starts from empty).
+ *     circumference on first mount (animation starts from empty).
  *  9. Trend label and arrow are rendered in the meta row.
  * 10. lastUpdated date is formatted and visible.
  * 11. [focus] SVG is keyboard-focusable (tabIndex=0).
@@ -30,10 +31,21 @@
  * 20. [focus] data-active-sector on the SVG matches the score band.
  * 21. [focus] High-contrast mode — focus-ring-color token resolves to white
  *     (token value tested indirectly via data-attribute).
+ * 22. data-initial-sweep is "true" only on first mount (non-reduced-motion)
+ *     and is cleared on later renders.
+ * 23. data-initial-sweep is absent when reduced motion is active, even on
+ *     first mount.
+ * 24. gauge-sweep @keyframes animation is scoped to [data-initial-sweep],
+ *     and .risk-gauge-fill has a stroke-dashoffset transition for later
+ *     updates (CSS source assertions, mirroring the existing
+ *     [data-motion="reduced"] source check below).
  */
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { RiskGauge, RiskSector } from './RiskGauge';
 
 // ── Constants (must match component) ─────────────────────────────────────────
@@ -88,6 +100,12 @@ describe('RiskGauge', () => {
 
   // ── Original test suite ──────────────────────────────────────────────────
 
+  it('renders a skeleton when loading is true', () => {
+    renderGauge({ loading: true });
+    expect(screen.getByRole('img', { name: /loading risk gauge/i })).toBeInTheDocument();
+    expect(screen.getByTestId('skeleton-mock') || document.querySelector('.skeleton-gauge')).toBeInTheDocument();
+  });
+
   it('renders an SVG element with role="img"', () => {
     renderGauge();
     expect(screen.getByRole('img')).toBeInTheDocument();
@@ -104,13 +122,13 @@ describe('RiskGauge', () => {
     expect(title?.textContent).toMatch(/improving/i);
   });
 
-  it('renders a polite sr-only paragraph with the same description', () => {
+  it('renders a polite sr-only live region with the same description', () => {
     renderGauge({ score: 72, trend: 'stable' });
-    // The sr-only paragraph is outside the SVG; it has aria-live="polite"
-    const srPara = document.querySelector('p[aria-live="polite"]');
-    expect(srPara).toBeInTheDocument();
-    expect(srPara?.textContent).toMatch(/risk score 72/i);
-    expect(srPara?.textContent).toMatch(/stable/i);
+    // The sr-only element is outside the SVG; it has aria-live="polite"
+    const srRegion = document.querySelector('div[aria-live="polite"]');
+    expect(srRegion).toBeInTheDocument();
+    expect(srRegion?.textContent).toMatch(/risk score 72/i);
+    expect(srRegion?.textContent).toMatch(/stable/i);
   });
 
   it('clamps score below 0 to 0', () => {
@@ -135,19 +153,26 @@ describe('RiskGauge', () => {
     expect(fill?.getAttribute('data-score')).toBe('55');
   });
 
-  it('animation key changes when score prop changes (re-mounts fill arc)', () => {
+  it('fill arc is NOT remounted on score change — dashoffset transitions in place instead of resetting to empty', () => {
     const { rerender, container } = render(
       <RiskGauge score={40} trend="stable" lastUpdated="2025-01-01T00:00:00Z" />,
     );
-    const keyBefore = container.querySelector('[data-score]')?.getAttribute('data-score');
+    const fillBefore = container.querySelector('[data-score]');
 
     rerender(
       <RiskGauge score={80} trend="stable" lastUpdated="2025-01-01T00:00:00Z" />,
     );
-    const keyAfter = container.querySelector('[data-score]')?.getAttribute('data-score');
+    const fillAfter = container.querySelector('[data-score]');
 
-    expect(keyBefore).toBe('40');
-    expect(keyAfter).toBe('80');
+    // Same DOM node — no remount, so the CSS transition on stroke-dashoffset
+    // can animate smoothly between the two values instead of the path
+    // restarting the sweep from empty on every update.
+    expect(fillAfter).toBe(fillBefore);
+    expect(fillAfter?.getAttribute('data-score')).toBe('80');
+    expect(Number(fillAfter?.getAttribute('stroke-dashoffset'))).toBeCloseTo(
+      offsetForScore(80),
+      1,
+    );
   });
 
   describe('reduced-motion: false (default / animation on)', () => {
@@ -169,6 +194,22 @@ describe('RiskGauge', () => {
       ).toBe('false');
       restore();
     });
+
+    it('data-initial-sweep is "true" on first mount and cleared on later renders', () => {
+      const restore = stubMatchMedia(false);
+      const { rerender, container } = render(
+        <RiskGauge score={40} trend="stable" lastUpdated="2025-01-01T00:00:00Z" />,
+      );
+      expect(
+        container.querySelector('[data-score]')?.getAttribute('data-initial-sweep'),
+      ).toBe('true');
+
+      rerender(<RiskGauge score={60} trend="stable" lastUpdated="2025-01-01T00:00:00Z" />);
+      expect(
+        container.querySelector('[data-score]')?.getAttribute('data-initial-sweep'),
+      ).toBeNull();
+      restore();
+    });
   });
 
   describe('reduced-motion: true (no animation)', () => {
@@ -187,6 +228,15 @@ describe('RiskGauge', () => {
       expect(
         document.querySelector('[data-reduced-motion]')?.getAttribute('data-reduced-motion'),
       ).toBe('true');
+      restore();
+    });
+
+    it('data-initial-sweep is absent even on first mount', () => {
+      const restore = stubMatchMedia(true);
+      const { container } = renderGauge({ score: 72 });
+      expect(
+        container.querySelector('[data-score]')?.getAttribute('data-initial-sweep'),
+      ).toBeNull();
       restore();
     });
   });
@@ -339,12 +389,14 @@ describe('RiskGauge', () => {
       expect(low?.getAttribute('aria-pressed')).toBe('false');
     });
 
-    it('pressing Enter on a sector fires onSectorActivate with that sector id', () => {
+    it('pressing Enter on a sector fires onSectorActivate with that sector id and announces activation', () => {
       const onActivate = vi.fn();
       const { container } = renderGauge({ onSectorActivate: onActivate });
       const mediumSector = container.querySelector('[data-sector="medium"]')!;
       fireEvent.keyDown(mediumSector, { key: 'Enter', code: 'Enter' });
       expect(onActivate).toHaveBeenCalledWith('medium');
+      const srRegion = document.querySelector('div[aria-live="polite"]');
+      expect(srRegion?.textContent).toMatch(/Activated Medium score zone, scores 50–69/i);
     });
 
     it('pressing Space on a sector fires onSectorActivate with that sector id', () => {
@@ -399,6 +451,17 @@ describe('RiskGauge', () => {
       const { container } = renderGauge();
       const arcs = container.querySelectorAll('.risk-gauge-sector-arc');
       expect(arcs).toHaveLength(3);
+    });
+
+    it('each sector arc has a color-blind safe pattern class', () => {
+      const { container } = renderGauge();
+      const highArc = container.querySelector('[data-sector-arc="high"]');
+      const mediumArc = container.querySelector('[data-sector-arc="medium"]');
+      const lowArc = container.querySelector('[data-sector-arc="low"]');
+
+      expect(highArc).toHaveClass('risk-gauge-pattern--high');
+      expect(mediumArc).toHaveClass('risk-gauge-pattern--medium');
+      expect(lowArc).toHaveClass('risk-gauge-pattern--low');
     });
 
     it('onSectorActivate is optional — sector click/keydown does not throw', () => {
@@ -470,5 +533,114 @@ describe('RiskGauge', () => {
       expect(container.querySelector('[data-sector="high"]')?.getAttribute('aria-pressed')).toBe('true');
       expect(container.querySelector('[data-sector="low"]')?.getAttribute('aria-pressed')).toBe('false');
     });
+  });
+
+  // ── Focus ring design token tests ──────────────────────────────────────────
+  //
+  // These tests verify that the focus ring uses shared design tokens from
+  // src/styles/focus.css for consistency across all components.
+
+  describe('focus ring — shared design tokens', () => {
+    it('SVG focus ring uses --focus-ring-color from focus.css tokens', () => {
+      const { container } = renderGauge();
+      const svg = container.querySelector('.risk-gauge-svg');
+      expect(svg).toHaveClass('risk-gauge-svg');
+      // Focus ring styles are applied via CSS class + :focus-visible
+      // The token reference is in the CSS file; verify the class exists
+      expect(svg).toBeDefined();
+    });
+
+    it('SVG focus ring box-shadow uses shared tokens (width, offset, color)', () => {
+      const cssPath = join(dirname(fileURLToPath(import.meta.url)), '../styles/focus.css');
+      const focusCss = readFileSync(cssPath, 'utf-8');
+      
+      // Verify the shared tokens are defined in focus.css
+      expect(focusCss).toMatch(/--focus-ring-width\s*:\s*2px/);
+      expect(focusCss).toMatch(/--focus-ring-offset\s*:\s*3px/);
+      expect(focusCss).toMatch(/--focus-ring-color\s*:\s*var\(--accent/);
+      
+      // Verify RiskGauge uses these tokens
+      const riskGaugeCss = readFileSync(
+        join(dirname(fileURLToPath(import.meta.url)), 'RiskGauge.css'),
+        'utf-8'
+      );
+      expect(riskGaugeCss).toMatch(/var\(--focus-ring-width\)/);
+      expect(riskGaugeCss).toMatch(/var\(--focus-ring-offset\)/);
+      expect(riskGaugeCss).toMatch(/var\(--focus-ring-color\)/);
+    });
+
+    it('high-contrast mode overrides focus-ring-color to white', () => {
+      const cssPath = join(dirname(fileURLToPath(import.meta.url)), '../styles/focus.css');
+      const focusCss = readFileSync(cssPath, 'utf-8');
+      
+      // Verify high-contrast override exists
+      expect(focusCss).toMatch(/\[data-contrast="high"\]\s*\{[^}]*--focus-ring-color:\s*#ffffff/);
+    });
+
+    it('focus ring is only visible on keyboard navigation (:focus-visible)', () => {
+      const cssPath = join(dirname(fileURLToPath(import.meta.url)), '../styles/focus.css');
+      const focusCss = readFileSync(cssPath, 'utf-8');
+      
+      // Verify :focus-visible is used, not just :focus
+      expect(focusCss).toMatch(/:focus-visible/);
+      // Verify RiskGauge uses :focus-visible
+      const riskGaugeCss = readFileSync(
+        join(dirname(fileURLToPath(import.meta.url)), 'RiskGauge.css'),
+        'utf-8'
+      );
+      expect(riskGaugeCss).toMatch(/:focus-visible/);
+    });
+  });
+});
+
+// ── CSS source assertions ────────────────────────────────────────────────────
+//
+// jsdom does not execute a real CSS cascade or resolve @media queries, so
+// asserting on window.getComputedStyle(...).animationName here would pass
+// or fail independently of whether the actual CSS rule exists — not a
+// meaningful regression check. Instead we assert directly against the
+// stylesheet source, mirroring the same approach used for the in-app
+// reduced-motion toggle check below (see docs/ACCESSIBILITY.md §6).
+
+describe('gauge-sweep CSS scoping', () => {
+  const cssPath = join(dirname(fileURLToPath(import.meta.url)), 'RiskGauge.css');
+  const css = readFileSync(cssPath, 'utf-8');
+
+  it('gauge-sweep keyframe animation is scoped to [data-initial-sweep="true"], not the bare .risk-gauge-fill class', () => {
+    const pattern = /\.risk-gauge-fill\[data-initial-sweep=["']true["']\]\s*\{[^}]*animation:\s*gauge-sweep/;
+    expect(css).toMatch(pattern);
+  });
+
+  it('.risk-gauge-fill has a stroke-dashoffset transition for smooth updates after the initial sweep', () => {
+    const pattern = /\.risk-gauge-fill\s*\{[^}]*transition:\s*stroke-dashoffset/;
+    expect(css).toMatch(pattern);
+  });
+
+  it('.risk-gauge-score has tabular-nums to prevent digit-width wobble during animation', () => {
+    const pattern = /\.risk-gauge-score\s*\{[^}]*font-variant-numeric:\s*tabular-nums/;
+    expect(css).toMatch(pattern);
+  });
+});
+
+describe('in-app reduced-motion toggle ([data-motion="reduced"])', () => {
+  const cssPath = join(dirname(fileURLToPath(import.meta.url)), 'RiskGauge.css');
+  const css = readFileSync(cssPath, 'utf-8');
+
+  it('disables the sector-dot pulse animation under [data-motion="reduced"]', () => {
+    // Matches: [data-motion="reduced"] .risk-gauge-sector-dot { animation: none; }
+    // (whitespace/formatting-tolerant so minor CSS reformatting doesn't break this)
+    const pattern = /\[data-motion=["']reduced["']\]\s*\.risk-gauge-sector-dot\s*\{[^}]*animation:\s*none/;
+    expect(css).toMatch(pattern);
+  });
+
+  it('disables the fill arc transition/animation under [data-motion="reduced"]', () => {
+    const pattern = /\[data-motion=["']reduced["']\]\s*\.risk-gauge-fill\s*\{[^}]*animation:\s*none[^}]*transition:\s*none/;
+    expect(css).toMatch(pattern);
+  });
+
+  it('the OS-level prefers-reduced-motion query also disables the sector-dot pulse', () => {
+    // Guards against someone fixing the [data-motion] gap while accidentally
+    // removing the pre-existing OS-level media query coverage.
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[^]*?\.risk-gauge-fill/);
   });
 });

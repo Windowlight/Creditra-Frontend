@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Search, ChevronDown } from "lucide-react";
 import { useLocation } from "react-router-dom";
+import { CopyToClipboard } from "../components/CopyToClipboard";
+import SupportForm from "../components/SupportForm";
+import { Tooltip } from "../components/Tooltip";
 import { VideoThumbnail } from "../components/VideoThumbnail";
 import { useActiveSection } from "../hooks/useActiveSection";
 import { useReducedMotion } from "../context/ReducedMotionContext";
@@ -25,7 +28,16 @@ const categories = [
   { id: "shortcuts", title: "Shortcuts", desc: "Learn the keyboard shortcuts available across the app." },
 ] as const;
 
-const faqs = [
+interface FaqItem {
+  id: string;
+  sectionId: string;
+  q: string;
+  a: string;
+  videoId?: string;
+  transcriptUrl?: string;
+}
+
+const faqs: FaqItem[] = [
   {
     id: "what-is-creditra",
     sectionId: "getting-started",
@@ -66,13 +78,15 @@ const faqs = [
     a: "Press ? outside text fields to open the shortcut overlay. Esc closes dialogs, and other shortcuts are grouped by surface inside the overlay.",
     transcriptUrl: "https://support.creditra.app/transcripts/keyboard-shortcuts",
   },
-] as const;
+];
 
 const SECTION_IDS = [...NAV_ITEMS.map((item) => item.id)];
 
 export default function HelpCenter() {
   const location = useLocation();
-  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const rawHash = location.hash || (typeof window !== "undefined" ? window.location.hash : "");
+  const hashId = rawHash.replace("#", "");
+  const [openFaqId, setOpenFaqId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const activeSection = useActiveSection(SECTION_IDS);
   const navRef = useRef<HTMLElement>(null);
@@ -89,10 +103,22 @@ export default function HelpCenter() {
     );
   }, [searchQuery]);
 
+  const activeFaqId = useMemo(() => {
+    if (hashId && faqs.some((f) => f.id === hashId)) {
+      return hashId;
+    }
+    return openFaqId;
+  }, [hashId, openFaqId]);
+
   useEffect(() => {
     if (!location.hash) return;
 
     const targetId = location.hash.replace("#", "");
+    const targetFaq = faqs.find((item) => item.id === targetId);
+    if (targetFaq) {
+      setOpenFaqId(targetFaq.id);
+    }
+
     const target = document.getElementById(targetId);
     if (!target) return;
 
@@ -117,6 +143,24 @@ export default function HelpCenter() {
     },
     [isReducedMotionActive],
   );
+
+  const handleFaqAnchorClick = useCallback(
+    (_e: React.MouseEvent<HTMLAnchorElement>, faqId: string) => {
+      setOpenFaqId(faqId);
+      const target = document.getElementById(faqId);
+      if (target) {
+        target.scrollIntoView({
+          behavior: isReducedMotionActive ? "instant" : "smooth",
+          block: "start",
+        });
+      }
+    },
+    [isReducedMotionActive],
+  );
+
+  const handleFaqToggle = useCallback((faqId: string) => {
+    setOpenFaqId((prev) => (prev === faqId ? null : faqId));
+  }, []);
 
   return (
     <div className="help-center">
@@ -161,50 +205,92 @@ export default function HelpCenter() {
             ))}
           </div>
 
+          <div className="help-center__support">
+            <h2 className="help-center__support-title">Contact Support</h2>
+            <p className="help-center__support-subtitle">
+              Send us details about your issue. Attach a file if it helps (logs, screenshots, PDFs).
+            </p>
+
+            <SupportForm
+              onSubmit={async () => {
+                // This screen only demonstrates the form; the caller can wire to a real API.
+              }}
+              maxAttachmentBytes={5 * 1024 * 1024}
+              acceptedAttachmentTypes={[".png", ".jpg", ".jpeg", ".pdf"]}
+            />
+          </div>
+
           <div id="faq" className="help-center__faq">
             <h2 className="help-center__faq-title">FAQ</h2>
-            {filteredFaqs.map((item, i) => (
-              <div key={item.id} className="help-center__faq-item">
-                <button
-                  onClick={() => setOpenIndex(openIndex === i ? null : i)}
-                  className="help-center__faq-btn"
-                  aria-expanded={openIndex === i}
-                  aria-controls={`faq-answer-${item.id}`}
-                >
-                  <span>
-                    <span className="help-center__faq-q">{item.q}</span>
-                    <span className="help-center__faq-category">
-                      {categories.find((category) => category.id === item.sectionId)?.title}
-                    </span>
-                  </span>
-                  <ChevronDown
-                    className={`help-center__faq-chevron${openIndex === i ? " help-center__faq-chevron--open" : ""}`}
-                  />
-                </button>
-                {openIndex === i && (
-                  <div id={`faq-answer-${item.id}`} className="help-center__faq-answer">
-                    <p>{item.a}</p>
-                    {item.videoId && (
-                      <VideoThumbnail
-                        title={item.q}
-                        videoId={item.videoId}
-                        transcriptUrl={item.transcriptUrl}
-                      />
-                    )}
-                    {!item.videoId && item.transcriptUrl && (
-                      <a
-                        href={item.transcriptUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="help-center__faq-transcript"
-                      >
-                        Read transcript
+
+            {filteredFaqs.map((item) => {
+              const isOpen = openFaqId === item.id;
+              const isCurrent = activeFaqId === item.id;
+
+              return (
+                <div key={item.id} id={item.id} className="help-center__faq-item">
+                  <div className="help-center__faq-header">
+                    <Tooltip label="Copy link"><a
+                      href={`#${item.id}`}
+                      className="help-center__faq-anchor"
+                      aria-current={isCurrent ? "true" : undefined}
+                      aria-label={`Direct link to FAQ: ${item.q}`}
+                      onClick={(e) => handleFaqAnchorClick(e, item.id)}
+                    >
+                      #
                       </a>
-                    )}
+                    </Tooltip>
+                    <button
+                      onClick={() => handleFaqToggle(item.id)}
+                      className="help-center__faq-btn"
+                      aria-expanded={isOpen}
+                      aria-controls={`faq-answer-${item.id}`}
+                      aria-current={isCurrent ? "true" : undefined}
+                    >
+                      <span>
+                        <span className="help-center__faq-q">{item.q}</span>
+                        <span className="help-center__faq-category">
+                          {categories.find((category) => category.id === item.sectionId)?.title}
+                        </span>
+                      </span>
+                      <ChevronDown
+                        className={`help-center__faq-chevron${isOpen ? " help-center__faq-chevron--open" : ""}`}
+                      />
+                    </button>
                   </div>
-                )}
-              </div>
-            ))}
+                  {isOpen && (
+                    <div id={`faq-answer-${item.id}`} className="help-center__faq-answer">
+                      <p>{item.a}</p>
+                      <CopyToClipboard
+                        value={item.a}
+                        ariaLabel={`Copy answer for ${item.q}`}
+                        copyLabel="Copy answer"
+                        copiedLabel="Answer copied"
+                        errorLabel="Copy failed"
+                        className="help-center__faq-copy"
+                      />
+                      {item.videoId && (
+                        <VideoThumbnail
+                          title={item.q}
+                          videoId={item.videoId}
+                          transcriptUrl={item.transcriptUrl}
+                        />
+                      )}
+                      {!item.videoId && item.transcriptUrl && (
+                        <a
+                          href={item.transcriptUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="help-center__faq-transcript"
+                        >
+                          Read transcript
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
             {filteredFaqs.length === 0 && (
               <p className="help-center__empty">
                 No help articles match that search yet. Try "wallet", "shortcut",
@@ -217,4 +303,3 @@ export default function HelpCenter() {
     </div>
   );
 }
-

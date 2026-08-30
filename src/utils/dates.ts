@@ -137,6 +137,9 @@ export function getCountdownAriaLabel(
  * Uses `Intl.RelativeTimeFormat` for the short-range cases and
  * `Intl.DateTimeFormat` for anything older than 24 h, so the string
  * is always locale-correct without a third-party library.
+ *
+ * @public Exported for use in `LastActivityStamp` and any future component
+ *         that needs a human-readable "time ago" label.
  */
 export function formatRelative(
   ts: Date | string | number,
@@ -186,4 +189,48 @@ export function formatRelative(
     day: 'numeric',
     ...(sameYear ? {} : { year: 'numeric' }),
   }).format(then);
+}
+
+export function startOfDay(date: Date): Date {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+export function startOfWeek(date: Date): Date {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = d.getDate() - day;
+  const result = new Date(d.setDate(diff));
+  result.setHours(0, 0, 0, 0);
+  return result;
+}
+
+export function startOfMonth(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), 1, 0, 0, 0, 0);
+}
+
+/**
+ * Return a full, locale-aware absolute datetime string suitable for tooltip
+ * or `<time datetime="…">` attributes.
+ *
+ * Examples:
+ *   – "Jan 15, 2025, 2:32 PM"
+ *   – "Dec 3, 2024, 10:05 AM"
+ *
+ * Renders month/day/year + 12-hour clock with AM/PM.
+ * No seconds are shown — the precision isn't needed in tooltips.
+ */
+export function formatAbsolute(
+  ts: Date | string | number,
+  locale: string = DEFAULT_LOCALE,
+): string {
+  const date = ts instanceof Date ? ts : new Date(ts);
+  return new Intl.DateTimeFormat(locale, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
 }

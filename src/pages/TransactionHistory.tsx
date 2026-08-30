@@ -1,9 +1,11 @@
-import React, { useState, useMemo } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import React, { useState, useMemo, useRef, useCallback, useEffect } from "react";
+import { Link, useSearchParams, useLocation, useNavigate } from "react-router-dom";
 import { CopyToClipboard } from "../components/CopyToClipboard";
-import { AmountRangeChips } from "../components/AmountRangeChips";
 import { DateRangeChips, type DatePreset } from "../components/DateRangeChips";
 import { AmountRangeChips, type AmountRangePreset } from "../components/AmountRangeChips";
+import { useDebounceValue } from "../hooks/useDebounceValue";
+import { toCsv, downloadCsv } from "../utils/csv";
+import { useNotifications } from "../context/NotificationContext";
 import { MOCK_CREDIT_LINES } from "../data/mockData";
 import type {
   CreditLineStatus,
@@ -14,6 +16,13 @@ import { startOfDay, startOfMonth, startOfWeek } from "../utils/dates";
 import { COLOR, fmt, fmtDate, fmtDateTime } from "../utils/tokens";
 import "./TransactionHistory.css";
 import { NoActivity, NoDataGraph, NoLines } from "../components/illustrations";
+import { TransactionHistorySkeleton } from "../components/TransactionHistorySkeleton";
+import { LiveRegion } from "../components/LiveRegion";
+import { KbdHint } from "../components/KbdHint";
+import {
+  DEFAULT_HISTORY_PAGE_SIZE,
+  paginateByCursor,
+} from "../utils/cursorPagination";
 
 /**
  * TransactionHistory Page Component
@@ -31,6 +40,7 @@ import { NoActivity, NoDataGraph, NoLines } from "../components/illustrations";
  * - Pagination with 15 items per page
  * - Expandable transaction details
  * - CSV export for the currently filtered transaction set
+ * - Accessible search combobox (see Search Combobox section below)
  *
  * Accessibility:
  * - All filter chips use role="group" with aria-labelledby for proper grouping
@@ -40,6 +50,19 @@ import { NoActivity, NoDataGraph, NoLines } from "../components/illustrations";
  * - Keyboard navigation: Tab to focus, Space/Enter to toggle filters
  * - Distinct visual states for active filters using CSS selectors
  * - Export button remains keyboard reachable with a 44 px target and disabled explanation
+ *
+ * Search Combobox (ARIA 1.2 combobox pattern, WCAG 2.1 AA SC 4.1.2):
+ * - role="combobox" on the input signals a combined text entry + popup to AT
+ * - aria-expanded reflects whether the suggestion listbox is currently open
+ * - aria-controls references the role="listbox" element for direct AT navigation
+ * - aria-autocomplete="list" — suggestions appear in a separate popup (not inline)
+ * - aria-activedescendant points to the focused role="option" without moving DOM focus
+ * - Keyboard: ArrowDown/Up to navigate, Enter to commit, Escape to dismiss, Tab to close
+ * - Suggestions are debounced (250 ms) to avoid over-filtering on every keystroke;
+ *   the raw input value drives the visible listbox while searchQuery (the debounced
+ *   value) drives filteredTransactions.
+ * - The clear (✕) button meets the 44 × 44 px touch target and announces "Clear search"
+ * - prefers-reduced-motion: the listbox slide-in animation is disabled
  *
  * Empty State UX:
  * - Separate rendering paths for "no lines" vs "no transactions" vs "no filtered results"
@@ -85,22 +108,38 @@ const TX_TYPE_COLORS: Record<TransactionType, string> = {
 };
 
 const STATUS_COLORS: Record<TransactionStatus, { bg: string; color: string }> =
-  {
-    Completed: { bg: "rgba(63,185,80,0.15)", color: COLOR.success },
-    Pending: { bg: "rgba(210,153,34,0.15)", color: COLOR.warning },
-    Failed: { bg: "rgba(248,81,73,0.15)", color: COLOR.danger },
-  };
+{
+  Completed: { bg: "rgba(63,185,80,0.15)", color: COLOR.success },
+  Pending: { bg: "rgba(210,153,34,0.15)", color: COLOR.warning },
+  Failed: { bg: "rgba(248,81,73,0.15)", color: COLOR.danger },
+};
+
+/**
+ * CSS pattern classes for each transaction status.
+ *
+ * These classes add a pure-CSS geometric pattern on top of the coloured
+ * background so that the three statuses are distinguishable without
+ * relying on colour alone (WCAG 2.1 SC 1.4.1 — Use of Color).
+ *
+ * The classes are defined in src/styles/patterns.css and are globally
+ * available via index.css.
+ */
+const STATUS_PATTERNS: Record<TransactionStatus, string> = {
+  Completed: "tx-status-pattern--completed",
+  Pending: "tx-status-pattern--pending",
+  Failed: "tx-status-pattern--failed",
+};
 
 const TYPE_FILTER_OPTIONS: Array<{
   value: "all" | Exclude<TransactionType, "StatusChange">;
   label: string;
 }> = [
-  { value: "all", label: "All" },
-  { value: "Draw", label: "Draw" },
-  { value: "Repay", label: "Repay" },
-  { value: "Fee", label: "Fee" },
-  { value: "Interest", label: "Interest" },
-];
+    { value: "all", label: "All" },
+    { value: "Draw", label: "Draw" },
+    { value: "Repay", label: "Repay" },
+    { value: "Fee", label: "Fee" },
+    { value: "Interest", label: "Interest" },
+  ];
 
 type TypeFilter = (typeof TYPE_FILTER_OPTIONS)[number]["value"];
 type RangePreset = "this-week" | "this-month" | "all-time" | "custom";
@@ -124,11 +163,11 @@ const AMOUNT_FILTER_OPTIONS: Array<{
   value: "all" | "lt100" | "100-1000" | "gt1000";
   label: string;
 }> = [
-  { value: "all", label: "All Amounts" },
-  { value: "lt100", label: "<$100" },
-  { value: "100-1000", label: "$100–$1,000" },
-  { value: "gt1000", label: ">$1,000" },
-];
+    { value: "all", label: "All Amounts" },
+    { value: "lt100", label: "<$100" },
+    { value: "100-1000", label: "$100–$1,000" },
+    { value: "gt1000", label: ">$1,000" },
+  ];
 
 type AmountFilter = (typeof AMOUNT_FILTER_OPTIONS)[number]["value"];
 
@@ -265,7 +304,7 @@ function TransactionRow({
         </td>
         <td className="tx-status">
           <span
-            className="tx-status-badge"
+            className={`tx-status-badge ${STATUS_PATTERNS[tx.status]}`}
             style={{
               background: STATUS_COLORS[tx.status].bg,
               color: STATUS_COLORS[tx.status].color,
@@ -381,9 +420,43 @@ function TransactionRow({
   );
 }
 
+/** Stable element ID that associates the export button with its helper text. */
+const CSV_EXPORT_EMPTY_REASON_ID = "csv-export-empty-reason";
+
+/**
+ * Rows rendered per page of the transaction table.
+ *
+ * Module-level so the first-paint skeleton can reserve exactly one page of
+ * rows (issue #854) — a shorter skeleton would let the table container grow on
+ * reveal and push the rest of the page down.
+ */
+const ITEMS_PER_PAGE = DEFAULT_HISTORY_PAGE_SIZE;
+
 export function TransactionHistory() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { addToast } = useNotifications();
+
+  /**
+   * First-paint loading guard.
+   *
+   * `isLoading` starts as `true` and is cleared to `false` in a
+   * zero-delay `useEffect` (runs after the first committed render).
+   * This gives the browser one frame to paint the skeleton before the
+   * full component tree is committed, preventing a flash of unstyled
+   * content on initial navigation.
+   *
+   * In a real application this flag would be wired to an async data
+   * fetch; here it simulates that pattern against the static mock data.
+   */
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    // Simulate async data resolution on first mount.
+    // Replace with the real data-fetch completion signal when the API is wired up.
+    const id = setTimeout(() => setIsLoading(false), 0);
+    return () => clearTimeout(id);
+  }, []);
 
   // ─── Filter and UI State ───
   const [selectedLine, setSelectedLine] = useState<string>("all");
@@ -406,9 +479,43 @@ export function TransactionHistory() {
   const [isCustomAmountRangeActive, setIsCustomAmountRangeActive] =
     useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  // ─── Combobox (accessible search with suggestions) ───────────────────────
+  // `searchInputValue` drives what the user sees while typing; `searchQuery`
+  // (the debounced value) drives the actual filter so we avoid re-filtering
+  // on every keystroke.
+  const [searchInputValue, setSearchInputValue] = useState("");
+  const debouncedSearch = useDebounceValue(searchInputValue, 250);
+  const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const listboxRef = useRef<HTMLUListElement>(null);
+  const SEARCH_LISTBOX_ID = "tx-search-listbox";
+  const SEARCH_INPUT_ID = "tx-search-input";
+
   const [expandedTx, setExpandedTx] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 15;
+  const [pageCursors, setPageCursors] = useState<Array<string | undefined>>([undefined]);
+  const itemsPerPage = ITEMS_PER_PAGE;
+
+  const [liveAnnouncement, setLiveAnnouncement] = useState("");
+  const isFirstRender = useRef(true);
+  const isResettingAllFilters = useRef(false);
+  const prevStates = useRef({
+    selectedLine,
+    selectedType,
+    selectedStatus,
+    selectedAmount,
+    dateRange,
+    presetRange,
+    customStartDate,
+    customEndDate,
+    selectedAmountRange,
+    isCustomAmountRangeActive,
+    customAmountMin,
+    customAmountMax,
+    searchQuery,
+    currentPage,
+  });
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -454,6 +561,55 @@ export function TransactionHistory() {
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
     );
   }, []);
+
+  // Sync the debounced input value into the filter state and reset page.
+  // This is the only place `searchQuery` (which drives filteredTransactions)
+  // is updated from user input, keeping keystroke and filter concerns separate.
+  useEffect(() => {
+    setSearchQuery(debouncedSearch);
+    setCurrentPage(1);
+  }, [debouncedSearch]);
+
+
+
+  /**
+   * Build a deduplicated list of suggestion strings from the full transaction
+   * set that contain the current raw input value.  Suggestions surface
+   * credit-line names, line IDs, and notes — matching the same fields that
+   * the filter already searches.  Capped at 8 items for a manageable list.
+   *
+   * Computed from `searchInputValue` (not the debounced value) so that
+   * the dropdown tracks the live keystroke, while filtering is debounced.
+   */
+  const suggestions = useMemo<string[]>(() => {
+    const q = searchInputValue.trim().toLowerCase();
+    if (!q) return [];
+
+    const seen = new Set<string>();
+    const results: string[] = [];
+
+    for (const tx of allTransactions) {
+      if (results.length >= 8) break;
+
+      const candidates: (string | undefined)[] = [
+        tx.lineName,
+        tx.lineId,
+        tx.note,
+      ];
+
+      for (const c of candidates) {
+        if (!c) continue;
+        const lower = c.toLowerCase();
+        if (lower.includes(q) && !seen.has(c)) {
+          seen.add(c);
+          results.push(c);
+          if (results.length >= 8) break;
+        }
+      }
+    }
+
+    return results;
+  }, [searchInputValue, allTransactions]);
 
   const filteredTransactions = useMemo(() => {
     return allTransactions.filter((tx) => {
@@ -560,10 +716,41 @@ export function TransactionHistory() {
   ]);
 
   const totalPages = Math.ceil(filteredTransactions.length / itemsPerPage);
-  const paginatedTransactions = useMemo(() => {
-    const start = (currentPage - 1) * itemsPerPage;
-    return filteredTransactions.slice(start, start + itemsPerPage);
-  }, [filteredTransactions, currentPage]);
+  const filterKey = JSON.stringify([
+    selectedLine,
+    selectedType,
+    selectedStatus,
+    selectedAmount,
+    dateRange,
+    presetRange,
+    customStartDate,
+    customEndDate,
+    selectedAmountRange,
+    isCustomAmountRangeActive,
+    customAmountMin,
+    customAmountMax,
+    searchQuery,
+  ]);
+  const previousFilterKey = useRef(filterKey);
+  useEffect(() => {
+    if (previousFilterKey.current === filterKey) return;
+    previousFilterKey.current = filterKey;
+    setCurrentPage(1);
+    setPageCursors([undefined]);
+    setExpandedTx(null);
+  }, [filterKey]);
+
+  const currentPageResult = useMemo(
+    () =>
+      paginateByCursor(filteredTransactions, {
+        cursor: pageCursors[currentPage - 1],
+        pageSize: itemsPerPage,
+        getDate: (tx) => tx.date,
+        getId: (tx) => tx.id,
+      }),
+    [filteredTransactions, pageCursors, currentPage, itemsPerPage],
+  );
+  const paginatedTransactions = currentPageResult.items;
 
   const paginatedGrouped = useMemo(() => {
     const groups: Record<string, TransactionWithLine[]> = {};
@@ -619,6 +806,89 @@ export function TransactionHistory() {
     setExpandedTx(expandedTx === txId ? null : txId);
   };
 
+  /**
+   * Commit a suggestion by value: populate the input and close the listbox.
+   * Keyboard selection (Enter) and mouse click both call this.
+   */
+  const commitSuggestion = useCallback((value: string) => {
+    setSearchInputValue(value);
+    // Force immediate filter application rather than waiting for debounce.
+    setSearchQuery(value);
+    setIsSuggestionsOpen(false);
+    setActiveSuggestionIndex(-1);
+    setCurrentPage(1);
+    // Note: no explicit .focus() call here — for keyboard (Enter) the input already
+    // has focus, and for mouse (onMouseDown + e.preventDefault()) focus stays on the
+    // input too.  A programmatic focus() would re-trigger onFocus and reopen the list.
+  }, []);
+
+  /**
+   * Close the suggestions dropdown without changing the committed query.
+   * Called on Escape and when focus leaves the combobox container.
+   */
+  const dismissSuggestions = useCallback(() => {
+    setIsSuggestionsOpen(false);
+    setActiveSuggestionIndex(-1);
+  }, []);
+
+  /**
+   * Keyboard handler attached to the combobox input.
+   * Implements the ARIA combobox keyboard interaction model:
+   *   ArrowDown — open list / move active option down
+   *   ArrowUp   — move active option up
+   *   Enter     — commit active option (or close if none)
+   *   Escape    — dismiss list, keep typed value
+   *   Tab       — dismiss list, let focus move naturally
+   */
+  const handleSearchKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      const listOpen = isSuggestionsOpen && suggestions.length > 0;
+
+      switch (e.key) {
+        case "ArrowDown":
+          e.preventDefault();
+          if (!listOpen) {
+            if (suggestions.length > 0) setIsSuggestionsOpen(true);
+            return;
+          }
+          setActiveSuggestionIndex((prev) =>
+            prev < suggestions.length - 1 ? prev + 1 : 0,
+          );
+          break;
+
+        case "ArrowUp":
+          e.preventDefault();
+          if (!listOpen) return;
+          setActiveSuggestionIndex((prev) =>
+            prev <= 0 ? suggestions.length - 1 : prev - 1,
+          );
+          break;
+
+        case "Enter":
+          if (listOpen && activeSuggestionIndex >= 0) {
+            e.preventDefault();
+            commitSuggestion(suggestions[activeSuggestionIndex]);
+          }
+          break;
+
+        case "Escape":
+          if (listOpen) {
+            e.preventDefault();
+            dismissSuggestions();
+          }
+          break;
+
+        case "Tab":
+          dismissSuggestions();
+          break;
+
+        default:
+          break;
+      }
+    },
+    [isSuggestionsOpen, suggestions, activeSuggestionIndex, commitSuggestion, dismissSuggestions],
+  );
+
   const hasLines = MOCK_CREDIT_LINES.length > 0;
   const hasTransactions = allTransactions.length > 0;
 
@@ -630,9 +900,154 @@ export function TransactionHistory() {
     dateRange !== "custom" ||
     customStartDate.length > 0 ||
     customEndDate.length > 0 ||
-    searchQuery.trim().length > 0;
+    searchInputValue.trim().length > 0;
 
   const resultCountText = `${filteredTransactions.length} ${filteredTransactions.length === 1 ? "transaction" : "transactions"} shown`;
+
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      prevStates.current = {
+        selectedLine,
+        selectedType,
+        selectedStatus,
+        selectedAmount,
+        dateRange,
+        presetRange,
+        customStartDate,
+        customEndDate,
+        selectedAmountRange,
+        isCustomAmountRangeActive,
+        customAmountMin,
+        customAmountMax,
+        searchQuery,
+        currentPage,
+      };
+      return;
+    }
+
+    const wasResettingAllFilters = isResettingAllFilters.current;
+    isResettingAllFilters.current = false;
+
+    let message = "";
+
+    if (wasResettingAllFilters) {
+      message = `Filters cleared. ${resultCountText}.`;
+    } else if (currentPage !== prevStates.current.currentPage) {
+      message = `Page ${currentPage} of ${totalPages} loaded. ${resultCountText}.`;
+    } else if (selectedType !== prevStates.current.selectedType) {
+      const typeLabel = selectedType === "all" ? "All" : TX_TYPE_LABELS[selectedType];
+      message = `Filtered by transaction type ${typeLabel}. ${resultCountText}.`;
+    } else if (selectedLine !== prevStates.current.selectedLine) {
+      const lineLabel =
+        selectedLine === "all"
+          ? "All"
+          : MOCK_CREDIT_LINES.find((cl) => cl.id === selectedLine)?.name || selectedLine;
+      message = `Filtered by credit line ${lineLabel}. ${resultCountText}.`;
+    } else if (selectedStatus !== prevStates.current.selectedStatus) {
+      message = `Filtered by status ${selectedStatus === "all" ? "All" : selectedStatus}. ${resultCountText}.`;
+    } else if (selectedAmount !== prevStates.current.selectedAmount) {
+      const amountLabel =
+        selectedAmount === "all"
+          ? "All"
+          : AMOUNT_FILTER_OPTIONS.find((o) => o.value === selectedAmount)?.label || selectedAmount;
+      message = `Filtered by amount ${amountLabel}. ${resultCountText}.`;
+    } else if (selectedAmountRange !== prevStates.current.selectedAmountRange) {
+      const rangeLabels: Record<string, string> = {
+        all: "All",
+        "under-5k": "Under $5k",
+        "5k-25k": "$5k to $25k",
+        "25k-plus": "Over $25k",
+      };
+      const rangeLabel = rangeLabels[selectedAmountRange] || selectedAmountRange;
+      message = `Filtered by amount range ${rangeLabel}. ${resultCountText}.`;
+    } else if (
+      isCustomAmountRangeActive !== prevStates.current.isCustomAmountRangeActive ||
+      customAmountMin !== prevStates.current.customAmountMin ||
+      customAmountMax !== prevStates.current.customAmountMax
+    ) {
+      if (isCustomAmountRangeActive) {
+        const minVal = customAmountMin ? `$${customAmountMin}` : "any";
+        const maxVal = customAmountMax ? `$${customAmountMax}` : "any";
+        message = `Custom amount range filter applied: ${minVal} to ${maxVal}. ${resultCountText}.`;
+      } else if (prevStates.current.isCustomAmountRangeActive) {
+        message = `Custom amount range filter cleared. ${resultCountText}.`;
+      }
+    } else if (
+      dateRange !== prevStates.current.dateRange ||
+      presetRange !== prevStates.current.presetRange ||
+      customStartDate !== prevStates.current.customStartDate ||
+      customEndDate !== prevStates.current.customEndDate
+    ) {
+      if (presetRange !== "custom") {
+        const presetLabels: Record<string, string> = {
+          "this-week": "This Week",
+          "this-month": "This Month",
+          "all-time": "All Time",
+        };
+        message = `Filtered by date preset ${presetLabels[presetRange] || presetRange}. ${resultCountText}.`;
+      } else if (dateRange !== "custom") {
+        const dateLabels: Record<string, string> = {
+          today: "Today",
+          "7d": "Last 7 days",
+          "30d": "Last 30 days",
+          "90d": "Last 90 days",
+        };
+        message = `Filtered by date preset ${dateLabels[dateRange] || dateRange}. ${resultCountText}.`;
+      } else if (customStartDate || customEndDate) {
+        const startVal = customStartDate || "any";
+        const endVal = customEndDate || "any";
+        message = `Filtered by custom date range from ${startVal} to ${endVal}. ${resultCountText}.`;
+      } else {
+        message = `Date filter cleared. ${resultCountText}.`;
+      }
+    } else if (searchQuery !== prevStates.current.searchQuery) {
+      if (searchQuery) {
+        message = `Search query "${searchQuery}" applied. ${resultCountText}.`;
+      } else {
+        message = `Search query cleared. ${resultCountText}.`;
+      }
+    }
+
+    prevStates.current = {
+      selectedLine,
+      selectedType,
+      selectedStatus,
+      selectedAmount,
+      dateRange,
+      presetRange,
+      customStartDate,
+      customEndDate,
+      selectedAmountRange,
+      isCustomAmountRangeActive,
+      customAmountMin,
+      customAmountMax,
+      searchQuery,
+      currentPage,
+    };
+
+    if (message) {
+      setLiveAnnouncement(message);
+    }
+  }, [
+    selectedLine,
+    selectedType,
+    selectedStatus,
+    selectedAmount,
+    dateRange,
+    presetRange,
+    customStartDate,
+    customEndDate,
+    selectedAmountRange,
+    isCustomAmountRangeActive,
+    customAmountMin,
+    customAmountMax,
+    searchQuery,
+    currentPage,
+    resultCountText,
+    totalPages,
+    hasActiveFilters,
+  ]);
 
   /**
    * Accessible table caption (A11Y-004).
@@ -671,8 +1086,8 @@ export function TransactionHistory() {
       parts.push(`status: ${selectedStatus}`);
     }
 
-    if (searchQuery.trim()) {
-      parts.push(`matching "${searchQuery.trim()}"`);
+    if (searchInputValue.trim()) {
+      parts.push(`matching "${searchInputValue.trim()}"`);
     }
 
     const count = filteredTransactions.length;
@@ -686,7 +1101,7 @@ export function TransactionHistory() {
     customStartDate,
     customEndDate,
     selectedStatus,
-    searchQuery,
+    searchInputValue,
     filteredTransactions.length,
   ]);
 
@@ -722,6 +1137,7 @@ export function TransactionHistory() {
   };
 
   const clearFilters = () => {
+    isResettingAllFilters.current = true;
     setSelectedLine("all");
     setSelectedType("all");
     setSelectedStatus("all");
@@ -735,6 +1151,9 @@ export function TransactionHistory() {
     setCustomAmountMax("");
     setIsCustomAmountRangeActive(false);
     setSearchQuery("");
+    setSearchInputValue("");
+    setIsSuggestionsOpen(false);
+    setActiveSuggestionIndex(-1);
     setCurrentPage(1);
     setExpandedTx(null);
     setSearchParams((prev) => {
@@ -743,6 +1162,16 @@ export function TransactionHistory() {
       return next;
     });
   };
+
+  if (isLoading) {
+    /*
+     * The skeleton mirrors this page's own DOM and class names, so its
+     * geometry is driven by TransactionHistory.css rather than a parallel
+     * stylesheet (issue #854).  `rows` is passed explicitly so the placeholder
+     * table reserves a full page and the reveal does not resize the container.
+     */
+    return <TransactionHistorySkeleton rows={ITEMS_PER_PAGE} />;
+  }
 
   if (!hasLines) {
     return (
@@ -1130,17 +1559,159 @@ export function TransactionHistory() {
             }}
           />
         </div>
-        <div className="th-search-group">
-          <label>Search</label>
-          <input
-            type="text"
-            placeholder="Search transactions..."
-            value={searchQuery}
-            onChange={(e) => {
-              setSearchQuery(e.target.value);
-              setCurrentPage(1);
-            }}
-          />
+        {/*
+         * ─── Accessible Search Combobox ──────────────────────────────────────
+         *
+         * Implements the ARIA 1.2 "combobox" pattern (single-select list):
+         *   - role="combobox" on the <input> signals a combined text entry +
+         *     popup to assistive technology.
+         *   - aria-expanded tracks whether the suggestion listbox is open.
+         *   - aria-controls points to the listbox element so AT can navigate
+         *     directly to options.
+         *   - aria-autocomplete="list" indicates that completion suggestions
+         *     appear in a separate element (the listbox) rather than inline.
+         *   - aria-activedescendant carries the ID of the currently focused
+         *     option so screen readers announce it without moving DOM focus
+         *     away from the input.
+         *
+         * Keyboard model (WCAG 2.1 SC 2.1.1):
+         *   ArrowDown / ArrowUp — move active suggestion
+         *   Enter               — commit highlighted suggestion
+         *   Escape              — dismiss listbox, keep current query
+         *   Tab                 — dismiss listbox, advance focus naturally
+         *
+         * The outer div is given role="none" so the containing filter group
+         * structure is preserved; `onBlur` uses `relatedTarget` to detect when
+         * focus moves entirely outside the combobox widget.
+         */}
+        <div
+          className="th-search-group"
+          onBlur={(e) => {
+            // Dismiss only if focus moves outside the entire combobox widget
+            // (input + listbox). Using currentTarget captures the container.
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+              dismissSuggestions();
+            }
+          }}
+        >
+          <div className="th-search-label-row">
+            <label htmlFor={SEARCH_INPUT_ID} className="th-filter-label">
+              Search
+            </label>
+            <div
+              className="th-search-shortcuts"
+              role="group"
+              aria-label="Search keyboard shortcuts"
+            >
+              <KbdHint
+                keys={["↑", "↓"]}
+                label="Navigate"
+                description="Use Arrow Up and Arrow Down to navigate search suggestions"
+              />
+              <KbdHint
+                keys="Enter"
+                label="Select"
+                description="Press Enter to select the active search suggestion"
+              />
+              <KbdHint
+                keys="Esc"
+                label="Close"
+                description="Press Escape to close search suggestions"
+              />
+            </div>
+          </div>
+          {/* combobox wrapper — positions the floating listbox */}
+          <div className="th-search-combobox">
+            <input
+              ref={searchInputRef}
+              id={SEARCH_INPUT_ID}
+              type="text"
+              role="combobox"
+              aria-label="Search transactions"
+              aria-expanded={isSuggestionsOpen && suggestions.length > 0}
+              aria-controls={SEARCH_LISTBOX_ID}
+              aria-autocomplete="list"
+              aria-activedescendant={
+                activeSuggestionIndex >= 0
+                  ? `tx-suggestion-${activeSuggestionIndex}`
+                  : undefined
+              }
+              placeholder="Search by note, line, ID, or hash…"
+              value={searchInputValue}
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSearchInputValue(val);
+                // Open the listbox whenever there is input; the suggestions
+                // useMemo will compute the correct list on the next render.
+                setIsSuggestionsOpen(val.trim().length > 0);
+                setActiveSuggestionIndex(-1);
+              }}
+              onKeyDown={handleSearchKeyDown}
+              onFocus={() => {
+                if (searchInputValue.trim() && suggestions.length > 0) {
+                  setIsSuggestionsOpen(true);
+                }
+              }}
+            />
+
+            {/* Clear button — only visible when query is non-empty */}
+            {searchInputValue && (
+              <button
+                type="button"
+                className="th-search-clear"
+                aria-label="Clear search"
+                tabIndex={0}
+                onClick={() => {
+                  setSearchInputValue("");
+                  setSearchQuery("");
+                  setIsSuggestionsOpen(false);
+                  setActiveSuggestionIndex(-1);
+                  setCurrentPage(1);
+                  searchInputRef.current?.focus();
+                }}
+              >
+                ✕
+              </button>
+            )}
+
+            {/*
+             * Suggestion listbox
+             *
+             * Hidden when no query is typed or suggestions list is empty.
+             * Always present in the DOM (display:none via CSS) so
+             * aria-controls always resolves to a valid element.
+             */}
+            <ul
+              ref={listboxRef}
+              id={SEARCH_LISTBOX_ID}
+              role="listbox"
+              aria-label="Search suggestions"
+              className={`th-search-listbox${isSuggestionsOpen && suggestions.length > 0 ? " th-search-listbox--open" : ""}`}
+            >
+              {suggestions.map((suggestion, index) => (
+                <li
+                  key={suggestion}
+                  id={`tx-suggestion-${index}`}
+                  role="option"
+                  aria-selected={index === activeSuggestionIndex}
+                  className={`th-search-option${index === activeSuggestionIndex ? " th-search-option--active" : ""}`}
+                  // Use onMouseDown (not onClick) so the event fires before the
+                  // input's onBlur, preventing premature listbox dismissal.
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    commitSuggestion(suggestion);
+                  }}
+                >
+                  <span className="th-search-option-icon" aria-hidden="true">
+                    🔍
+                  </span>
+                  {suggestion}
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
 
         <div
@@ -1155,17 +1726,25 @@ export function TransactionHistory() {
 
       <div className="th-table-container">
         {filteredTransactions.length === 0 ? (
-          <div className="empty-state">
+          <div
+            className="empty-state"
+            role="status"
+            aria-live="polite"
+          >
             <NoDataGraph className="empty-state-illustration--muted" />
-            <h3>No transactions match these filters</h3>
-            <p>Try another transaction type, date range, or search term.</p>
+            <h2>No transactions found</h2>
+            <p>
+              We couldn't find any transactions matching your current filters.
+              Try another transaction type, date range, or search term.
+            </p>
             {hasActiveFilters && (
               <button
                 type="button"
-                className="th-clear-filters-btn"
+                className="empty-state-btn"
                 onClick={clearFilters}
+                aria-label="Reset all filters to view transaction history"
               >
-                Clear filters
+                Reset Filters
               </button>
             )}
           </div>
@@ -1214,10 +1793,15 @@ export function TransactionHistory() {
                 </span>
                 <button
                   className="th-page-btn"
-                  onClick={() =>
-                    setCurrentPage((p) => Math.min(totalPages, p + 1))
-                  }
-                  disabled={currentPage === totalPages}
+                  onClick={() => {
+                    if (!currentPageResult.nextCursor) return;
+                    setPageCursors((cursors) => [
+                      ...cursors.slice(0, currentPage),
+                      currentPageResult.nextCursor as string,
+                    ]);
+                    setCurrentPage((p) => Math.min(totalPages, p + 1));
+                  }}
+                  disabled={currentPage === totalPages || !currentPageResult.hasNextPage}
                 >
                   Next
                 </button>
@@ -1226,6 +1810,7 @@ export function TransactionHistory() {
           </>
         )}
       </div>
+      <LiveRegion message={liveAnnouncement} />
     </div>
   );
 }

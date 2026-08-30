@@ -2,13 +2,22 @@
   RiskGauge styles
   ────────────────────────────────────────────────────────────────────────────
   All colours use semantic tokens (var(--*)) — no hardcoded hex.
-  The animated fill arc uses a CSS @keyframes that drives stroke-dashoffset
-  from the full circumference (empty gauge) to the computed target offset.
+
+  The fill arc's animated sweep has two modes:
+  1. Initial mount: a @keyframes rule (scoped to [data-initial-sweep="true"])
+     drives stroke-dashoffset from full circumference (empty) to the
+     computed target offset.
+  2. Every later score change: the fill path is never remounted, so a plain
+     `transition` on stroke-dashoffset glides from the previous value to the
+     new one, instead of replaying the full empty→value sweep.
 
   Animation is suppressed entirely for users who prefer reduced motion:
-  - The @keyframes rule is wrapped in a `not prefers-reduced-motion` query.
-  - The JS component also reads matchMedia to initialise dashoffset at the
-    final value, preventing any flash-of-empty-arc.
+  - Both the @keyframes rule and the transition are killed via
+    `prefers-reduced-motion: reduce` and the in-app [data-motion="reduced"]
+    override.
+  - The JS component also reads the reduced-motion state to initialise
+    dashoffset at the final value on first mount, preventing any
+    flash-of-empty-arc.
 
   Focus rings
   ────────────────────────────────────────────────────────────────────────────
@@ -41,13 +50,15 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 0.5rem 0 1rem;
+  padding: var(--space-2, 0.5rem) 0 var(--space-4, 1rem);
 }
 
 .risk-gauge-svg {
-  width: 160px;
-  height: 100px;
-  margin-bottom: 0.75rem;
+  width: 100%;
+  max-width: 160px;
+  height: auto;
+  aspect-ratio: 160 / 100;
+  margin-bottom: var(--space-3, 0.75rem);
   /*
     overflow: visible is required so that:
     a) the box-shadow focus ring is not clipped at the SVG viewport edge.
@@ -84,10 +95,21 @@
             [data-contrast="high"] override → #ffffff on #000000 = 21:1 ✓
 */
 .risk-gauge-svg:focus-visible {
+  /*
+    Use shared design tokens from focus.css for consistent focus appearance
+    across all components. The double box-shadow creates the visual equivalent
+    of outline + outline-offset.
+
+    Layer 1 (2px, --bg)          → gap between element edge and ring
+    Layer 2 (2px + 3px offset)   → the visible focus ring
+
+    Using var(--focus-ring-width) and var(--focus-ring-offset) from
+    :root in focus.css ensures consistency with other components.
+  */
   box-shadow:
-    0 0 0 2px var(--bg, #0d1117),
-    0 0 0 5px var(--focus-ring-color, var(--accent, #58a6ff));
-  border-radius: 8px;
+    0 0 0 var(--focus-ring-width, 2px) var(--bg, #0d1117),
+    0 0 0 calc(var(--focus-ring-width, 2px) + var(--focus-ring-offset, 3px)) var(--focus-ring-color, var(--accent, #58a6ff));
+  border-radius: var(--focus-ring-radius, 6px);
 }
 
 /* ── Track (background arc) ──────────────────────────────────────────────── */
@@ -114,20 +136,32 @@
   */
   --gauge-circumference: 172.79;
   --gauge-target-offset: 0;
+
+  /*
+    Smooth glide for score updates *after* the initial mount. The fill path
+    is no longer remounted on every score change (see RiskGauge.tsx), so a
+    plain stroke-dashoffset change now animates via this transition instead
+    of replaying the full empty→value keyframe sweep. Same duration/easing
+    as gauge-sweep below, so the initial sweep and later updates feel
+    consistent.
+  */
+  transition: stroke-dashoffset 300ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* ── Arc sweep animation ─────────────────────────────────────────────────── */
+/* ── Arc sweep animation (initial mount only) ────────────────────────────── */
 /*
-  Only applied when the user has NOT requested reduced motion.
-  The keyframe sweeps dashoffset from circumference (empty) → target offset.
-  Duration: 900ms — long enough to be legible, short enough not to feel slow.
-  Easing: cubic-bezier(0.25, 0.46, 0.45, 0.94) — ease-out feel (fast start,
-  gentle deceleration), matching the util-bar-fill transition in Dashboard.css.
+  Only applied when the user has NOT requested reduced motion, and only on
+  the fill path's first paint — scoped via [data-initial-sweep="true"], which
+  the component clears after mount (see RiskGauge.tsx). Subsequent score
+  changes are handled by the `transition` on `.risk-gauge-fill` above instead,
+  so the gauge doesn't replay this empty→value sweep on every minor update.
+  Duration: 300ms. Easing: cubic-bezier(0.16, 1, 0.3, 1) — ease-out feel
+  (fast start, gentle deceleration).
 */
 
 @media (prefers-reduced-motion: no-preference) {
-  .risk-gauge-fill {
-    animation: gauge-sweep 900ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+  .risk-gauge-fill[data-initial-sweep="true"] {
+    animation: gauge-sweep 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 }
 
@@ -142,8 +176,8 @@
 
 /* ── Reduced-motion explicit reset ──────────────────────────────────────── */
 /*
-  Belt-and-suspenders: even if the animation somehow fires, kill it instantly
-  and jump to the final state.
+  Belt-and-suspenders: even if the animation or transition somehow fires,
+  kill it instantly and jump to the final state.
   IMPORTANT: focus ring styles are NOT suppressed here — the ring must remain
   visible regardless of prefers-reduced-motion (WCAG 2.4.11).
 */
@@ -206,9 +240,14 @@
     Chrome 86+, Firefox 85+, Safari 15.4+.
   For older browsers the ring gracefully degrades to invisible (no worse
   than the pre-existing state).
+
+  Uses shared design tokens from focus.css:
+    --focus-ring-color (defaults to --accent)
+    --focus-ring-width (defaults to 2px)
 */
 .risk-gauge-sector:focus-visible .risk-gauge-sector-focus-rect {
   stroke: var(--focus-ring-color, var(--accent, #58a6ff));
+  stroke-width: var(--focus-ring-width, 2px);
   /* A second, wider shadow-like stroke gives the "glow" appearance */
   filter: drop-shadow(0 0 3px var(--focus-ring-color, var(--accent, #58a6ff)));
 }
@@ -230,6 +269,10 @@
   }
 }
 
+[data-motion="reduced"] .risk-gauge-sector-dot {
+  animation: none;
+}
+
 @keyframes sector-dot-pulse {
   0%, 100% { opacity: 1; r: 4; }
   50%       { opacity: 0.6; r: 5; }
@@ -238,15 +281,18 @@
 /* ── Typography ──────────────────────────────────────────────────────────── */
 
 .risk-gauge-score {
-  font-size: 2rem;
-  font-weight: 700;
+  font-size: var(--text-5xl, 2rem);
+  font-weight: var(--font-bold, 700);
   fill: var(--text);
   text-anchor: middle;
   dominant-baseline: middle;
+  /* Tabular numerals prevent digit-width wobble as score animates */
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
 }
 
 .risk-gauge-label {
-  font-size: 0.65rem;
+  font-size: var(--text-xs, 0.75rem);
   fill: var(--muted);
   text-anchor: middle;
   text-transform: uppercase;
@@ -257,7 +303,7 @@
 
 .risk-meta {
   display: flex;
-  gap: 1.5rem;
+  gap: var(--space-6, 1.5rem);
   justify-content: center;
 }
 
@@ -267,7 +313,7 @@
 
 .risk-meta-item .rm-label {
   display: block;
-  font-size: 0.65rem;
+  font-size: var(--text-xs, 0.75rem);
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -276,8 +322,8 @@
 }
 
 .risk-meta-item .rm-value {
-  font-size: 0.85rem;
-  font-weight: 600;
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: var(--font-semibold, 600);
   line-height: var(--lh-body, 1.6);
 }
 
@@ -286,14 +332,63 @@
 @media (max-width: 768px) {
   .risk-meta {
     flex-direction: column;
-    gap: 0.5rem;
+    gap: var(--space-2, 0.5rem);
   }
 }
 
 /* Reduced Motion Override */
 [data-motion="reduced"] .risk-gauge-fill {
-    animation: none;
-    transition: none;
-    /* stroke-dashoffset is set to the final value by the JS component */
+  animation: none;
+  transition: none;
+  /* stroke-dashoffset is set to the final value by the JS component */
+}
+
+/* ── High contrast (prefers-contrast: more) ──────────────────────────────── */
+/*
+  Responds to the OS-level `prefers-contrast: more` media query with explicit
+  border and text overrides.
+
+  This is orthogonal to the in-app `[data-contrast="high"]` toggle (see
+  docs/HIGH_CONTRAST.md). That toggle re-declares the semantic colour tokens;
+  this block hardens component-internal treatments that a token swap alone does
+  not reach — the track arc's low-contrast `--border` stroke, the subtle 0.15-
+  opacity risk bands, and the `--muted` caption/meta text.
+
+  Borders (SVG strokes):
+  - The background track normally strokes `--border` (#30363d ≈ 1.3:1 on the
+    #0d1117 background — nearly invisible when empty). Promote it to `--text`
+    (≈ 12.5:1) and thicken it so the gauge outline reads clearly.
+  - The risk-band arcs sit at 0.15 opacity at rest; raise them so band
+    boundaries are distinguishable.
+
+  Text:
+  - The "SCORE" caption and the Trend / Last Updated meta labels use `--muted`
+    (≈ 4.6:1). Promote them to `--text` for AAA-level legibility.
+  The score number already uses `--text`, so it needs no override.
+*/
+@media (prefers-contrast: more) {
+  /* Border: make the track outline explicit and thicker. */
+  .risk-gauge-bg {
+    stroke: var(--text);
+    stroke-width: 12;
   }
 
+  /* Border: risk-band boundaries become clearly visible. */
+  .risk-gauge-sector-arc {
+    opacity: 0.6;
+  }
+
+  .risk-gauge-sector:hover .risk-gauge-sector-arc,
+  .risk-gauge-sector:focus .risk-gauge-sector-arc {
+    opacity: 1;
+  }
+
+  /* Text: promote muted caption + meta labels to the full-strength token. */
+  .risk-gauge-label {
+    fill: var(--text);
+  }
+
+  .risk-meta-item .rm-label {
+    color: var(--text);
+  }
+}

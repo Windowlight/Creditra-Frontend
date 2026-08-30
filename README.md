@@ -23,6 +23,7 @@ talks to Stellar wallets via injected provider APIs.
   a single `WalletInfo` shape (`src/utils/wallet.ts`) behind one
   `WalletProvider` (`src/context/WalletContext.tsx`).
 - **WCAG 2.1 AA by default.** Three composable hooks
+- **Smoother first paint.** The Credit Lines route now shows a branded skeleton state on first load so the page feels responsive while data is settling.
   (`useFocusTrap`, `useBodyScrollLock`, `useInertBackdrop`) standardise every modal.
   Every interactive element meets the 44×44 px touch target.
 - **Token-first styling.** Color, spacing, radius and elevation tokens live in
@@ -112,6 +113,7 @@ Every entry below is grounded in a real file in `src/`.
 | --- | --- | --- |
 | `/` | `pages/Dashboard.tsx` | Risk gauge, credit summary, recent transactions, wallet chip |
 | `/credit-lines` | `pages/CreditLines.tsx` | Credit-line list with sort by status/limit/utilization/APR/risk |
+| `/compare-credit-lines` | `pages/CreditLineCompare.tsx` | Side-by-side comparison of two credit lines. Accepts `?a=<id>&b=<id>`; falls back to an inline picker. Navigable from the "Full Compare →" button on the credit-lines page. |
 | `/transactions` | `pages/TransactionHistory.tsx` | Filterable transaction ledger with sortable headers |
 | `/repay` | `pages/RepayPage.tsx` | Repay flow with Smart Pay suggested amount, percent presets, review step |
 | `/draw-credit` | `pages/DrawCreditPage.tsx` | 4-step wizard: select → amount → confirm → status |

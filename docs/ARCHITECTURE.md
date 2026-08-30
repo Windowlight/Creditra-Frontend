@@ -159,6 +159,7 @@ notifications while keeping transaction confirmations).
 | `/` | `<Dashboard />` | Default landing for a connected wallet |
 | `/transactions` | `<TransactionHistory />` | Sortable, filterable ledger |
 | `/credit-lines` | route is rendered in the nav but currently delegates to `pages/CreditLines.tsx`; wiring happens via `App.tsx` updates |
+| `/compare-credit-lines` | `<CreditLineCompare />` | Side-by-side comparison of two credit lines. Accepts `?a=<id>&b=<id>` query params; falls back to an inline picker when params are absent or invalid. Linked from the "Full Compare →" button on `/credit-lines`. |
 | `/draw-credit` | `<DrawCreditPage />` | 4-step wizard |
 | `/draw-credit/success` | `<DrawCreditPage />` | Same component, success branch driven by `useLocation().state.transaction` |
 | `/open-credit` | `<RequestEvaluation />` | New-applicant intake |
@@ -190,7 +191,7 @@ stateDiagram-v2
 
 | State | Visual | Component |
 | --- | --- | --- |
-| Loading | Shimmer matching the final layout | `components/Skeleton.tsx` (`Skeleton.css` animation, `prefers-reduced-motion` disables shimmer) |
+| Loading | Shimmer matching the final layout | `components/Skeleton.tsx` (`Skeleton.css` animation, `prefers-reduced-motion` disables shimmer). `TransactionHistory` uses the page-level `components/TransactionHistorySkeleton.tsx` wrapper which composes `Skeleton` into a full stats + filter + table placeholder. `RepaymentVisualizer` uses `RepaymentVisualizerSkeleton` (issue #609) for a one-frame first-paint gate that mirrors the chart card geometry. |
 | Empty | Illustration + primary CTA to populate | inline per page (e.g. Dashboard's "no credit lines" state) |
 | Error | Banner + retry, or full-page `ErrorBoundary` if render-time | `components/ErrorBoundary.tsx` for render errors, `BannerAlert` for fetch errors |
 | Ready | Real data | the screen |
@@ -256,7 +257,7 @@ src/
 │   ├── notifications/   ToastContainer, BannerAlert, NotificationBell, NotificationCenter
 │   ├── (modals)         WalletConnectionModal, RepayModal, OnboardingFlow
 │   ├── (inputs)         FormField, FormMessage, AmountInput, PendingButton
-│   ├── (status)         StatusBadge, Skeleton, SuccessState, TransactionStatus, RiskGauge
+│   ├── (status)         StatusBadge, Skeleton, TransactionHistorySkeleton, SuccessState, TransactionStatus, RiskGauge
 │   ├── (a11y)           AccessibleTooltip, CopyToClipboard
 │   └── ErrorBoundary    Top-level render-error catcher
 ├── context/
@@ -265,7 +266,8 @@ src/
 ├── hooks/
 │   ├── useFocusTrap.ts
 │   ├── useBodyScrollLock.ts
-│   └── useInertBackdrop.ts
+│   ├── useInertBackdrop.ts
+│   └── useScrollRestoration.ts   — saves/restores scrollY per route
 ├── utils/
 │   ├── tokens.ts        Color/spacing tokens + formatters
 │   ├── wallet.ts        Wallet provider glue

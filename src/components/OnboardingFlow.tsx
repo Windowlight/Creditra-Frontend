@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { usePrefersReducedMotion } from '../hooks/usePrefersReducedMotion';
+import { Tooltip } from './Tooltip';
 import './OnboardingFlow.css';
 
 interface Props {
@@ -42,6 +43,7 @@ const steps = [
 
 export const OnboardingFlow = ({ isOpen, onComplete, onSkip }: Props) => {
   const [currentStep, setCurrentStep] = useState(0);
+  const [direction, setDirection] = useState<'forward' | 'backward'>('forward');
   const prefersReducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
@@ -78,6 +80,11 @@ export const OnboardingFlow = ({ isOpen, onComplete, onSkip }: Props) => {
     onSkip();
   }, [onSkip]);
 
+  const handleSelectStep = useCallback((index: number) => {
+    setDirection(index > currentStep ? 'forward' : 'backward');
+    setCurrentStep(index);
+  }, [currentStep]);
+
   useEffect(() => {
     if (!isOpen) return;
 
@@ -85,11 +92,13 @@ export const OnboardingFlow = ({ isOpen, onComplete, onSkip }: Props) => {
       if (event.key === 'Escape') {
         event.preventDefault();
         handleSkip();
+        return;
       }
 
       if (event.key === 'ArrowRight') {
         event.preventDefault();
         handleNext();
+        return;
       }
 
       if (event.key === 'ArrowLeft') {
@@ -102,12 +111,19 @@ export const OnboardingFlow = ({ isOpen, onComplete, onSkip }: Props) => {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [handleBack, handleNext, handleSkip, isOpen]);
 
+  if (!isOpen) {
+    return null;
+  }
+
   return (
     <div className="onboarding-overlay" role="dialog" aria-modal="true" aria-label="Onboarding">
       <div className="onboarding-content">
-        <button className="skip-btn" onClick={handleSkip} aria-label="Skip onboarding">
-          Skip
-        </button>
+        <Tooltip label="Skip onboarding flow" position="bottom" hoverDelay={400} longPressDelay={500}>
+          <button type="button" className="skip-btn" onClick={handleSkip} aria-label="Skip onboarding">
+            <span className="skip-icon" aria-hidden="true">✕</span>
+            <span className="skip-text">Skip</span>
+          </button>
+        </Tooltip>
 
         <div className="progress-label" aria-live="polite">
           Step {currentStep + 1} of {steps.length}
@@ -118,9 +134,17 @@ export const OnboardingFlow = ({ isOpen, onComplete, onSkip }: Props) => {
             <motion.div
               key={currentStep}
               className="onboarding-step"
-              initial={prefersReducedMotion ? { opacity: 1, x: 0 } : { opacity: 0, x: 20 }}
+              initial={
+                prefersReducedMotion
+                  ? { opacity: 1, x: 0 }
+                  : { opacity: 0, x: direction === 'forward' ? 20 : -20 }
+              }
               animate={{ opacity: 1, x: 0 }}
-              exit={prefersReducedMotion ? { opacity: 1, x: 0 } : { opacity: 0, x: -20 }}
+              exit={
+                prefersReducedMotion
+                  ? { opacity: 1, x: 0 }
+                  : { opacity: 0, x: direction === 'forward' ? -20 : 20 }
+              }
               transition={{ duration: prefersReducedMotion ? 0 : 0.3 }}
             >
               <div className="step-icon">{step.icon}</div>
@@ -131,35 +155,45 @@ export const OnboardingFlow = ({ isOpen, onComplete, onSkip }: Props) => {
         </div>
 
         <div className="step-indicators" role="list">
-          {steps.map((_, index) => (
-            <div
-              key={index}
-              role="listitem"
-              className={`indicator ${index === currentStep ? 'active' : ''} ${index < currentStep ? 'completed' : ''}`}
-              aria-current={index === currentStep ? 'step' : undefined}
-              aria-label={`Step ${index + 1}`}
-            >
-              {index < currentStep ? '✓' : index + 1}
+          {steps.map((s, index) => (
+            <div key={index} role="listitem">
+              <Tooltip label={`Step ${index + 1}: ${s.title}`} position="top" hoverDelay={400} longPressDelay={500}>
+                <button
+                  type="button"
+                  className={`indicator ${index === currentStep ? 'active' : ''} ${index < currentStep ? 'completed' : ''}`}
+                  onClick={() => handleSelectStep(index)}
+                  aria-current={index === currentStep ? 'step' : undefined}
+                  aria-label={`Step ${index + 1}`}
+                >
+                  {index < currentStep ? '✓' : index + 1}
+                </button>
+              </Tooltip>
             </div>
           ))}
         </div>
 
         <div className="button-group">
-          <button
-            className="secondary-btn"
-            onClick={handleBack}
-            disabled={isFirstStep}
-            aria-label="Go back"
-          >
-            Back
-          </button>
-          <button
-            className="primary-btn"
-            onClick={handleNext}
-            aria-label={isLastStep ? 'Get started' : 'Next step'}
-          >
-            {isLastStep ? 'Get Started' : 'Next'}
-          </button>
+          <Tooltip label="Go to previous step" position="top" hoverDelay={400} longPressDelay={500} disabled={isFirstStep}>
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={handleBack}
+              disabled={isFirstStep}
+              aria-label="Go back"
+            >
+              Back
+            </button>
+          </Tooltip>
+          <Tooltip label={isLastStep ? 'Complete onboarding' : 'Go to next step'} position="top" hoverDelay={400} longPressDelay={500}>
+            <button
+              type="button"
+              className="primary-btn"
+              onClick={handleNext}
+              aria-label={isLastStep ? 'Get started' : 'Next step'}
+            >
+              {isLastStep ? 'Get Started' : 'Next'}
+            </button>
+          </Tooltip>
         </div>
       </div>
     </div>

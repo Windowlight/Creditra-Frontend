@@ -108,12 +108,12 @@ describe('FileUploadZone', () => {
     render(<FileUploadZone onFilesUploaded={mockOnFilesUploaded} />);
     
     const file = new File(['pasted content'], 'pasted.pdf', { type: 'application/pdf' });
-    const dataTransfer = new DataTransfer();
-    dataTransfer.items.add(file);
     
-    fireEvent.paste(window, {
-      clipboardData: dataTransfer,
+    const pasteEvent = new Event('paste', { bubbles: true });
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: dataTransfer,
     });
+    window.dispatchEvent(pasteEvent);
     
     await waitFor(() => {
       expect(screen.getByText('pasted.pdf')).toBeInTheDocument();

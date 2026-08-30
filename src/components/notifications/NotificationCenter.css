@@ -116,6 +116,7 @@
   color: var(--bg, #0d1117);
   font-size: 0.7rem;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
   padding: 0.1rem 0.4rem;
   border-radius: 10px;
   min-width: 18px;
@@ -169,6 +170,16 @@
   display: inline-flex;
   align-items: center;
   transition: opacity 0.15s;
+}
+
+.nc-btn-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.nc-shortcut-hint {
+  font-size: 0.65rem;
 }
 
 .nc-text-btn:hover         { opacity: 0.75; }
@@ -357,6 +368,7 @@
 
 .nc-item-time {
   font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
   color: var(--muted, #8b949e);
   flex-shrink: 0;
 }
@@ -406,8 +418,8 @@
     height: 100dvh;          /* dynamic viewport height for mobile browsers */
     max-width: none;
     height: var(--nc-sheet-height, 50vh);
-    max-height: calc(100dvh - env(safe-area-inset-top, 0px));
-    padding-top: env(safe-area-inset-top, 0px);
+    max-height: calc(100dvh - var(--sat, env(safe-area-inset-top, 0px)));
+    padding-top: var(--sat, env(safe-area-inset-top, 0px));
     border-left: none;
     border-top: 1px solid var(--border, #30363d);
     /* Rounded top corners */
@@ -418,7 +430,7 @@
                 visibility 0s linear 0.3s;
     box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.5);
     /* Safe area insets for devices with home indicator / notch */
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-bottom: var(--sab, env(safe-area-inset-bottom, 0px));
   }
 
   .nc-panel-open {
